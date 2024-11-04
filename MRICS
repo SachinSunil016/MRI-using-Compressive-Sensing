@@ -1,0 +1,88 @@
+# Install necessary libraries
+!pip install numpy torch pywavelets
+
+import numpy as np
+import pywt
+import torch
+import torch.optim as optim
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+from PIL import Image
+
+# Function to undersample k-space
+def undersample_k_space(k_space, mask):
+    return k_space * mask
+
+# Inverse wavelet transform function
+def inverse_wavelet_transform(coeffs, wavelet):
+    return pywt.waverec2(coeffs, wavelet)
+
+# Wavelet transform function
+def wavelet_transform(image, wavelet):
+    return pywt.wavedec2(image, wavelet)
+
+# MRI compressive sensing reconstruction function
+def mri_cs_reconstruction(k_space, mask, wavelet='db4', max_iter=100, lr=0.01):
+    undersampled_k_space = undersample_k_space(k_space, mask)
+    image_shape = k_space.shape  # shape of the 2D k-space data
+
+    # Convert numpy array to torch tensor and ensure it requires gradients
+    undersampled_k_space = torch.tensor(undersampled_k_space, dtype=torch.complex64)
+
+    def loss_fn(reconstructed_image, undersampled_k_space):
+        reconstructed_k_space = torch.fft.fftn(reconstructed_image, dim=(-2, -1))
+        return F.mse_loss(undersampled_k_space.real, reconstructed_k_space.real) + \
+               F.mse_loss(undersampled_k_space.imag, reconstructed_k_space.imag)
+
+    # Initial guess for the reconstructed image
+    reconstructed_image = torch.fft.ifftn(undersampled_k_space, dim=(-2, -1)).abs()
+
+    coeffs = wavelet_transform(reconstructed_image.detach().numpy(), wavelet)
+    coeffs_tensor = torch.tensor(coeffs[0], dtype=torch.complex64)
+
+    optimizer = optim.Adam([coeffs_tensor], lr=lr)
+
+    for _ in range(max_iter):
+        optimizer.zero_grad()
+        coeffs = [coeffs_tensor.detach().numpy(), *coeffs[1:]]
+        reconstructed_image = inverse_wavelet_transform(coeffs, wavelet)
+        reconstructed_image = torch.tensor(reconstructed_image, dtype=torch.float32)
+        loss = loss_fn(reconstructed_image, undersampled_k_space)
+        loss.backward()
+        optimizer.step()
+
+        if _ % 10 == 0:
+            print(f"Iteration {_}, Loss: {loss.item()}")
+
+    coeffs = [coeffs_tensor.detach().numpy(), *coeffs[1:]]
+    reconstructed_image = inverse_wavelet_transform(coeffs, wavelet)
+    return reconstructed_image
+
+# Load image data from a JPEG file
+image_path = '/kaggle/input/brain-mri-images/GAN-Traning Images/OAS2_0001_MR2_y_slice_112.jpg' 
+image = Image.open(image_path).convert('L')  
+k_space = np.fft.fftn(image_np)
+
+# Ensure k-space is shifted properly
+k_space = np.fft.fftshift(k_space)
+reconstructed_image = image
+# Generate a random undersampling mask
+def generate_random_mask(shape, sampling_rate=0.3):
+    np.random.seed(42)
+    mask = np.random.rand(*shape) < sampling_rate
+    return mask.astype(np.float32)
+
+mask = generate_random_mask(k_space.shape, 0.3)
+
+
+
+# Display the reconstructed image
+fig, axs = plt.subplots(1, 2)
+axs[0].imshow(image,cmap='gray')
+axs[0].set_title('Original Image')
+axs[0].axis('off')
+
+axs[1].imshow(reconstructed_image,cmap='gray')
+axs[1].set_title('Reconstructed MRI Image')
+axs[1].axis('off')
+plt.show()
