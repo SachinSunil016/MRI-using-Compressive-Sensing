@@ -1,4 +1,4 @@
-# Install necessary libraries
+
 !pip install numpy torch pywavelets
 
 import numpy as np
